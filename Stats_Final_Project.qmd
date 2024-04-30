@@ -1,0 +1,1753 @@
+---
+title: "Effects of Medicaid on Clinical Outcomes"
+author: "Damini, Yoobee & Sathwik"
+format: 
+  html:
+     theme: cosmo
+     code-line-numbers: true
+     linkcolor: blue
+     toc: true
+     toc-depth: 3
+     embed-resources: true
+     self-contained-math: true
+editor: visual
+---
+
+Git Hub Repo:<https://github.com/sathwik-bollepalli/STAT5125_Final_Project>
+
+# IMPACT OF MEDICAID COVERAGE ON PHYSICAL AND MENTAL HEALTH
+
+# **Abstract**
+
+This study leverages a comprehensive dataset from the Oregon Health Insurance Experiment to develop a predictive model assessing the impact of Medicaid expansion on healthcare utilization and mental health outcomes. By analyzing variables from in-person interviews, surveys, state program participation, healthcare patterns, emergency department visits, and more, we aim to identify key predictors of mental health improvements and healthcare service usage among Medicaid beneficiaries. The predictive model seeks to offer actionable insights for healthcare providers and policymakers to optimize health insurance programs for improved mental health support and efficient healthcare service utilization.
+
+# **Introduction**:
+
+The relationship between health insurance coverage, specifically Medicaid expansion, and health outcomes remains a pivotal area of inquiry in health economics and public policy. The Oregon Health Insurance Experiment, a landmark study initiated through a unique lottery system for Medicaid enrollment, provides a valuable dataset for exploring this relationship further. Our study proposes to utilize machine learning techniques to analyze the dataset, focusing on predicting healthcare utilization patterns and mental health outcomes among participants. By doing so, we aim to contribute to the ongoing discourse on the efficacy of health insurance expansion as a tool for public health improvement.
+
+# **Goal**
+
+We aim to develop a machine learning model that predicts the impact of health insurance coverage on mental and/or physical health improvements.
+
+# **Data Description**:
+
+Key features of the dataset include:
+
+-   Blood pressure, cholesterol levels, glycated hemoglobin measurements
+
+-   Depression screening outcomes
+
+-   Medication inventories
+
+-   Self-reported health diagnoses
+
+-   Healthcare utilization data
+
+-   Out-of-pocket spending
+
+The data was collected from two groups:
+
+1.  6,387 adults who were offered Medicaid enrollment ("lottery winners")
+
+2.  5,842 adults who were not offered Medicaid ("control group")
+
+Additionally, the data collection involved in-person interviews, health assessments, and surveys conducted within the Portland metropolitan area.
+
+Overall, this unique dataset from a randomized controlled trial provides valuable opportunities to analyze the impact of Medicaid coverage on various health outcomes and healthcare utilization patterns.
+
+# Data Import
+
+Importing Required Libraries
+
+```{r}
+library(tidyr)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(visdat)
+library(naniar)
+library(tidymodels)
+library(klaR)
+library(discrim)
+library(yardstick)
+theme_set(theme_bw())
+```
+
+```{r}
+oregon_patterns <- read.csv("data/oregonhie_patterns_vars.csv")
+oregon_descriptive <- read.csv("data/oregonhie_descriptive_vars.csv")
+oregon_in_person <- read.csv("data/oregonhie_inperson_vars.csv")
+oregon_emergency <- read.csv("data/oregonhie_ed_vars.csv")
+oregon_survey_0m <- read.csv("data/oregonhie_survey0m_vars.csv")
+oregon_survey_6m <- read.csv("data/oregonhie_survey6m_vars.csv")
+oregon_survey_12m <- read.csv("data/oregonhie_survey12m_vars.csv")
+```
+
+```{r}
+dim(oregon_patterns)
+dim(oregon_descriptive)
+dim(oregon_in_person)
+dim(oregon_emergency)
+dim(oregon_survey_6m)
+dim(oregon_survey_12m)
+```
+
+Checking for Duplicate Values
+
+```{r}
+ tables <- list(
+   oregon_survey_12m = oregon_survey_12m,
+   oregon_survey_6m = oregon_survey_6m,
+   oregon_survey_0m = oregon_survey_0m,
+   oregon_emergency = oregon_emergency,
+   oregon_in_person = oregon_in_person,
+   oregon_descriptive = oregon_descriptive,
+   oregon_patterns = oregon_patterns
+ )
+ 
+ for (table_name in names(tables)) {
+   data <- tables[[table_name]]
+   has_duplicates <- anyDuplicated(data$person_id) > 0
+   has_nulls <- any(is.na(data$person_id))
+   
+   print(table_name)
+   if (has_duplicates) {
+     print("has duplicates")
+   } else {
+     print("no duplicates")
+   }
+ 
+   if (has_nulls) {
+     print("has null values in person_id.")
+   } else {
+     print("no null values in person_id.")
+   }
+   print("---------------------")
+ }
+
+```
+
+# Data cleaning
+
+For data cleaning, we implemented several steps to ensure the quality of our dataset. Initially, we developed a **custom function** tailored to convert data into a usable format and then employed various **imputation techniques** such as regression to fill in the gaps of missing data. Subsequently, we conducted a thorough data cleansing process, leveraging **regular expressions** to identify and correct any inconsistencies or errors present in the dataset, especially when dealing with strings to convert them into binary ensuring uniformity and accuracy across all records.
+
+## 1. oregon_in_person dataset
+
+check non-numeric values
+
+```{r}
+non_numeric_columns <- names(oregon_in_person)[sapply(oregon_in_person, function(x) !is.numeric(x))]
+
+unique_non_numeric_values <- lapply(oregon_in_person[non_numeric_columns], function(x) unique(x))
+
+for (i in seq_along(non_numeric_columns)) {
+  cat("Column:", non_numeric_columns[i], "\n")
+  print(unique_non_numeric_values[[i]])
+  cat("\n")
+}
+```
+
+1.  Change "Yes", "No" to 1, 0
+
+```{r}
+# Replace "Yes" with 1 and "No" with 0
+non_numeric_cols <- names(oregon_in_person)[sapply(oregon_in_person, function(x) !is.numeric(x))]
+
+for (col in non_numeric_cols) {
+  oregon_in_person[[col]] <- ifelse(oregon_in_person[[col]] == "Yes", 1, 
+                                    ifelse(oregon_in_person[[col]] == "No", 0, oregon_in_person[[col]]))
+}
+```
+
+2.  change values that looks like "(integer): (description)" to coresponding integer
+
+```{r}
+cols_to_clean <- names(oregon_in_person)[sapply(oregon_in_person, function(x) any(grepl("\\d+: ", x)))]
+
+for (col in cols_to_clean) {
+  oregon_in_person[[col]] <- gsub("^(\\d+):.*", "\\1", oregon_in_person[[col]])
+}
+
+oregon_in_person[cols_to_clean] <- lapply(oregon_in_person[cols_to_clean], as.numeric)
+
+# Check
+for (col in cols_to_clean) {
+  unique_values <- unique(oregon_in_person[[col]])
+  cat("Unique values in", col, ":\n")
+  print(unique_values)
+  cat("\n")
+}
+```
+
+3.  Change "Respondent", "Non Respondent" to 1, 0
+
+```{r}
+# 0, 1 : non, res
+
+unique(oregon_in_person$sample_resp_inp)
+col <- 'sample_resp_inp'
+ 
+oregon_in_person[[col]] <- ifelse(oregon_in_person[[col]] == "Respondent", 1, 
+                                    ifelse(oregon_in_person[[col]] == "Non Respondent", 0, oregon_in_person[[col]]))
+
+unique(oregon_in_person$sample_resp_inp)
+```
+
+4.  Language_inp (Language of survey) - Mutate the data using one-hot encoding
+
+```{r}
+# dummy
+unique(oregon_in_person$language_inp) 
+
+#one-hot encoding
+encoded_language <- model.matrix(~ language_inp - 1, data = oregon_in_person)
+
+colnames(encoded_language) <- gsub("^language_inp", "", colnames(encoded_language))
+
+oregon_in_person <- cbind(oregon_in_person, encoded_language)
+
+#check
+unique(oregon_in_person$English) 
+unique(oregon_in_person$Spanish) 
+
+unique(oregon_in_person$language_inp) 
+
+oregon_in_person <- subset(oregon_in_person, select = -c(language_inp))
+```
+
+5.  gender_inp, edu_inp: mapping
+
+```{r}
+# male: 0 to f to m: 4
+unique(oregon_in_person$gender_inp)
+
+gender_mapping <- c("Female" = 1, 
+                    "Male" = 0, 
+                    "Transgender F to M" = 0, 
+                    "Transgender: M to F" = 1)
+
+oregon_in_person$gender_inp <- gender_mapping[oregon_in_person$gender_inp]
+
+unique_values <- unique(oregon_in_person$gender_inp)
+cat("Unique values in gender_inp:\n")
+print(unique_values)
+```
+
+```{r}
+# order 1 to 4
+unique(oregon_in_person$edu_inp)
+
+education_mapping <- c(
+                        "Less than HS" = 1,
+                        "HS diploma or GED" = 2,
+                        "Post HS, not 4-year" = 3,
+                        "4 year degree or more" = 4)
+
+oregon_in_person$edu_inp <- education_mapping[oregon_in_person$edu_inp]
+
+unique_values <- unique(oregon_in_person$edu_inp)
+cat("Unique values in edu_inp:\n")
+print(unique_values)
+```
+
+6.  scale_id_inp (ID of Scale used to measure weight), stadio_id_inp (ID of Stadiometer used to measure height), omron_id_inp (ID of equipment used to measure blood pressure)\
+    We could map the data using ID categories, but these values seems hard to interpret, seems not meaningful for analysis. So we decide to drop it.
+
+```{r}
+ list_id_inp <- c("scale_id_inp", "stadio_id_inp", "omron_id_inp")
+ 
+ for (col in list_id_inp) {
+   missing_count <- sum(oregon_in_person[[col]] == "")
+   cat("Number of missing values in", col, ":", missing_count, "\n")
+ }
+```
+
+```{r}
+oregon_in_person <- subset(oregon_in_person, select = -c(scale_id_inp, stadio_id_inp, omron_id_inp))
+```
+
+7.  Dealing with datetime data: dt_release_inp, dt_completed_inp\
+    Convert the data to datetime objects and extract components (day, month and year)
+
+```{r}
+oregon_in_person$dt_release_inp <- ymd(oregon_in_person$dt_release_inp)
+oregon_in_person$dt_completed_inp <- ymd(oregon_in_person$dt_completed_inp)
+
+oregon_in_person$release_year <- year(oregon_in_person$dt_release_inp)
+oregon_in_person$release_month <- month(oregon_in_person$dt_release_inp)
+oregon_in_person$release_day <- day(oregon_in_person$dt_release_inp)
+
+oregon_in_person$completed_year <- year(oregon_in_person$dt_completed_inp)
+oregon_in_person$completed_month <- month(oregon_in_person$dt_completed_inp)
+oregon_in_person$completed_day <- day(oregon_in_person$dt_completed_inp)
+
+#drop dt_
+oregon_in_person <- subset(oregon_in_person, select = -c(dt_release_inp, dt_completed_inp))
+```
+
+Converting 0,1 as numeric; few are stored as string
+
+```{r}
+#to numeric
+non_numeric_columns <- names(oregon_in_person)[sapply(oregon_in_person, function(x) !is.numeric(x))]
+
+oregon_in_person <- oregon_in_person |>
+  mutate_at(vars(non_numeric_columns), as.numeric)
+```
+
+**check**
+
+```{r}
+#check 
+non_numeric_columns <- names(oregon_in_person)[sapply(oregon_in_person, function(x) !is.numeric(x))]
+
+unique_non_numeric_values <- lapply(oregon_in_person[non_numeric_columns], function(x) unique(x))
+
+for (i in seq_along(non_numeric_columns)) {
+  cat("Column:", non_numeric_columns[i], "\n")
+  print(unique_non_numeric_values[[i]])
+  cat("\n")
+}
+```
+
+#### Dealing with missing values
+
+```{r}
+oregon_in_person |>   
+  miss_var_summary()|>
+  filter(n_miss>0)|>
+  ggplot(aes(variable,pct_miss))+
+  geom_bar(stat = "identity")
+```
+
+```{r}
+missing_percentage <- rowMeans(is.na(oregon_in_person))
+
+threshold <- 0.8  
+complete_rows <- missing_percentage < threshold
+oregon_in_person_complete <- oregon_in_person[complete_rows, ]
+
+dim(oregon_in_person_complete)
+```
+
+```{r}
+missing_col <- colMeans(is.na(oregon_in_person_complete))
+
+complete_cols <- missing_col < 0.2
+
+oregon_in_person_complete <- oregon_in_person_complete[,complete_cols]
+
+dim(oregon_in_person_complete)
+
+oregon_in_person_complete |>   
+  miss_var_summary()|>
+  filter(n_miss>0)|>
+  ggplot(aes(variable,pct_miss))+
+  geom_bar(stat = "identity")
+```
+
+```{r}
+missing_col <- colSums(is.na(oregon_in_person_complete))
+# print(missing_col)
+
+columns_with_missing <- names(oregon_in_person_complete)[colSums(is.na(oregon_in_person_complete)) > 0]
+
+# Step 2: Check the unique values in each of these columns
+for (col in columns_with_missing) {
+  unique_values <- unique(oregon_in_person_complete[[col]])
+  cat("Column:", col, "\n")
+  # print(unique_values)
+  # cat("\n")
+}
+```
+
+-   binary columns - fill missing values with 0
+
+```{r}
+non_binary_columns <- character(0)
+binary_columns <- character(0)
+
+columns_with_missing <- names(oregon_in_person_complete)[colSums(is.na(oregon_in_person_complete)) > 0]
+
+for (col in columns_with_missing) {
+  unique_values <- unique(oregon_in_person_complete[[col]])
+  num_unique <- length(unique_values)
+  if (num_unique == 3) {
+    binary_columns <- c(binary_columns, col)
+  } else {
+    non_binary_columns <- c(non_binary_columns, col)
+  }
+}
+```
+
+```{r}
+oregon_in_person_complete[binary_columns][is.na(oregon_in_person_complete[binary_columns])] <- 0
+```
+
+-   Binary target columns - drop row that have NA values in target columns
+
+```{r}
+sum(is.na(oregon_in_person_complete$happiness_inp))
+sum(is.na(oregon_in_person_complete$health_change_inp))
+
+oregon_in_person_complete <- oregon_in_person_complete[complete.cases(oregon_in_person_complete$happiness_inp, oregon_in_person_complete$health_change_inp), ]
+
+sum(is.na(oregon_in_person_complete$happiness_inp))
+sum(is.na(oregon_in_person_complete$health_change_inp))
+```
+
+-   Non binary - to median
+
+```{r}
+impute_median <- function(x) {
+  median_value <- median(x, na.rm = TRUE)  
+  x[is.na(x)] <- median_value  
+  return(x)
+}
+
+for (col in non_binary_columns) {
+  if (is.numeric(oregon_in_person_complete[[col]]) && length(unique(oregon_in_person_complete[[col]])) > 2) {
+    oregon_in_person_complete[[col]] <- impute_median(oregon_in_person_complete[[col]])
+  }
+}
+```
+
+```{r}
+#non-numeric values
+non_numeric_columns <- names(oregon_descriptive)[sapply(oregon_descriptive, function(x) !is.numeric(x))]
+
+unique_non_numeric_values <- lapply(oregon_descriptive[non_numeric_columns], function(x) unique(x))
+
+for (i in seq_along(non_numeric_columns)) {
+  cat("Column:", non_numeric_columns[i], "\n")
+  print(unique_non_numeric_values[[i]])
+  cat("\n")
+}
+```
+
+#### Mutating
+
+1.  mapping
+
+```{r}
+non_numeric_cols <- names(oregon_descriptive)[sapply(oregon_descriptive, function(x) !is.numeric(x))]
+
+for (col in non_numeric_cols) {
+  # "Yes", "No"
+  oregon_descriptive[[col]] <- ifelse(oregon_descriptive[[col]] == "Yes", 1, 
+                                    ifelse(oregon_descriptive[[col]] == "No", 0, oregon_descriptive[[col]]))
+  
+  #"Selected", "Not selected"
+  oregon_descriptive[[col]] <- ifelse(oregon_descriptive[[col]] == "Selected", 1, 
+                                    ifelse(oregon_descriptive[[col]] == "Not selected", 0, oregon_descriptive[[col]]))
+  
+  #"Submitted an Application to OHP", "Did NOT submit an application to OHP"
+  oregon_descriptive[[col]] <- ifelse(oregon_descriptive[[col]] == "Submitted an Application to OHP", 1, 
+                                    ifelse(oregon_descriptive[[col]] == "Did NOT submit an application to OHP", 0, oregon_descriptive[[col]]))
+  
+  #"Alive" "Dead" 
+  oregon_descriptive[[col]] <- ifelse(oregon_descriptive[[col]] == "Dead", 1, 
+                                    ifelse(oregon_descriptive[[col]] == "Alive", 0, oregon_descriptive[[col]]))
+  
+  #"Gave Phone Number", "Did NOT give phone number"
+  oregon_descriptive[[col]] <- ifelse(oregon_descriptive[[col]] == "Gave Phone Number", 1, 
+                                    ifelse(oregon_descriptive[[col]] == "Did NOT give phone number", 0, oregon_descriptive[[col]]))
+  
+  #"signed self up", "signed self up + 1 additional person", "signed self up + 2 additional people"
+  oregon_descriptive[[col]] <- ifelse(oregon_descriptive[[col]] == "signed self up", 1, 
+                                    ifelse(oregon_descriptive[[col]] == "signed self up + 1 additional person", 2,
+                                           ifelse(oregon_descriptive[[col]] == "signed self up + 2 additional people", 3, oregon_descriptive[[col]])))
+  
+  #"Requested English materials", "Requested materials in language other than english"
+  oregon_descriptive[[col]] <- ifelse(oregon_descriptive[[col]] == "Requested English materials", 1, 
+                                    ifelse(oregon_descriptive[[col]] == "Requested materials in language other than english", 0, oregon_descriptive[[col]]))
+  
+  #"Did NOT sign up for lottery list on first day", "Signed up for lottery list on first day" 
+  oregon_descriptive[[col]] <- ifelse(oregon_descriptive[[col]] == "Signed up for lottery list on first day", 1, 
+                                    ifelse(oregon_descriptive[[col]] == "Did NOT sign up for lottery list on first day", 0, oregon_descriptive[[col]]))
+  
+  #"Did NOT sign up for lottery list on last day", "Signed up for lottery list on last day"
+  oregon_descriptive[[col]] <- ifelse(oregon_descriptive[[col]] == "Signed up for lottery list on last day", 1, 
+                                    ifelse(oregon_descriptive[[col]] == "Did NOT sign up for lottery list on last day", 0, oregon_descriptive[[col]]))
+  
+  #"Signed self up", "Did NOT sign self up"
+  oregon_descriptive[[col]] <- ifelse(oregon_descriptive[[col]] == "Signed self up", 1, 
+                                    ifelse(oregon_descriptive[[col]] == "Did NOT sign self up", 0, oregon_descriptive[[col]]))
+  
+  #"Zip code of residence in a MSA", "Zip code of residence NOT in a MSA" 
+  oregon_descriptive[[col]] <- ifelse(oregon_descriptive[[col]] == "Zip code of residence in a MSA", 1, 
+                                    ifelse(oregon_descriptive[[col]] == "Zip code of residence NOT in a MSA", 0, oregon_descriptive[[col]]))
+  
+}
+```
+
+2.  int : string to int
+
+```{r}
+cols_to_clean <- names(oregon_descriptive)[sapply(oregon_descriptive, function(x) any(grepl("\\d+: ", x)))]
+
+for (col in cols_to_clean) {
+  oregon_descriptive[[col]] <- gsub("^.*(\\d+):.*", "\\1", oregon_descriptive[[col]])
+}
+
+# Convert the columns to numeric
+oregon_descriptive[cols_to_clean] <- lapply(oregon_descriptive[cols_to_clean], as.numeric)
+
+# Check unique values in the cleaned columns
+for (col in cols_to_clean) {
+  unique_values <- unique(oregon_descriptive[[col]])
+  cat("Unique values in", col, ":\n")
+  print(unique_values)
+  cat("\n")
+}
+```
+
+3.  extract numeric
+
+```{r}
+extract_numeric <- function(x) {
+  gsub("\\D", "", x)
+}
+
+oregon_descriptive$draw_lottery <- extract_numeric(oregon_descriptive$draw_lottery)
+oregon_descriptive$week_list <- extract_numeric(oregon_descriptive$week_list)
+
+#check
+unique_values_draw_lottery <- unique(oregon_descriptive$draw_lottery)
+cat("Unique values in draw_lottery :\n", unique_values_draw_lottery)
+
+unique_values_week_list <- unique(oregon_descriptive$week_list)
+cat("\n Unique values in week_list :\n", unique_values_week_list)
+```
+
+4.  dt_retro_coverage - datetime
+
+```{r}
+oregon_descriptive$dt_retro_coverage <- ymd(oregon_descriptive$dt_retro_coverage)
+oregon_descriptive$dt_app_decision <- ymd(oregon_descriptive$dt_app_decision)
+
+
+oregon_descriptive$retro_year <- year(oregon_descriptive$dt_retro_coverage)
+oregon_descriptive$retro_month <- month(oregon_descriptive$dt_retro_coverage)
+oregon_descriptive$retro_day <- day(oregon_descriptive$dt_retro_coverage)
+
+
+oregon_descriptive$app_year <- year(oregon_descriptive$dt_app_decision)
+oregon_descriptive$app_month <- month(oregon_descriptive$dt_app_decision)
+oregon_descriptive$app_day <- day(oregon_descriptive$dt_app_decision)
+
+
+#drop dt_
+oregon_descriptive <- subset(oregon_descriptive, select = -c(dt_retro_coverage, dt_app_decision))
+```
+
+-   as.numeric
+
+```{r}
+non_numeric_columns <- names(oregon_descriptive)[sapply(oregon_descriptive, function(x) !is.numeric(x))]
+
+oregon_descriptive <- oregon_descriptive |>
+  mutate_at(vars(non_numeric_columns), as.numeric)
+```
+
+**Check**
+
+```{r}
+non_numeric_columns <- names(oregon_descriptive)[sapply(oregon_descriptive, function(x) !is.numeric(x))]
+
+unique_non_numeric_values <- lapply(oregon_descriptive[non_numeric_columns], function(x) unique(x))
+
+for (i in seq_along(non_numeric_columns)) {
+  cat("Column:", non_numeric_columns[i], "\n")
+  print(unique_non_numeric_values[[i]])
+  cat("\n")
+}
+```
+
+#### Dealing with missing values
+
+We also need to count down ""!!
+
+```{r}
+oregon_descriptive |>   
+  miss_var_summary()|>
+  filter(n_miss>0)|>
+  ggplot(aes(variable,pct_miss))+
+  geom_bar(stat = "identity")
+```
+
+```{r}
+#drop columns that have missing values more than 20%
+missing_col <- colMeans(is.na(oregon_descriptive))
+complete_cols <- missing_col < 0.2
+oregon_descriptive_complete <- oregon_descriptive[,complete_cols]
+
+dim(oregon_descriptive_complete)
+
+#drop rows if female_list is NA
+oregon_descriptive <- oregon_descriptive_complete[complete.cases(oregon_descriptive_complete$female_list, oregon_descriptive_complete$zip_msa_list), ]
+
+oregon_descriptive |>   
+  miss_var_summary()|>
+  filter(n_miss>0)|>
+  ggplot(aes(variable,pct_miss))+
+  geom_bar(stat = "identity")
+```
+
+## 2. oregon_emergency
+
+```{r}
+non_numeric_columns <- names(oregon_emergency)[sapply(oregon_emergency, function(x) !is.numeric(x))]
+
+unique_non_numeric_values <- lapply(oregon_emergency[non_numeric_columns], function(x) unique(x))
+
+for (i in seq_along(non_numeric_columns)) {
+  cat("Column:", non_numeric_columns[i], "\n")
+  print(unique_non_numeric_values[[i]])
+  cat("\n")
+}
+```
+
+```{r}
+# Replace "Yes" with 1 and "No" with 0
+non_numeric_cols <- names(oregon_emergency)[sapply(oregon_emergency, function(x) !is.numeric(x))]
+
+for (col in non_numeric_cols) {
+  oregon_emergency[[col]] <- ifelse(oregon_emergency[[col]] == "Yes", 1, 
+                                    ifelse(oregon_emergency[[col]] == "No", 0, oregon_emergency[[col]]))
+}
+
+oregon_emergency <- oregon_emergency |>
+  mutate_at(vars(non_numeric_cols), as.numeric)
+```
+
+```{r}
+#check
+
+non_numeric_columns <- names(oregon_emergency)[sapply(oregon_emergency, function(x) !is.numeric(x))]
+
+unique_non_numeric_values <- lapply(oregon_emergency[non_numeric_columns], function(x) unique(x))
+for (i in seq_along(non_numeric_columns)) {
+  cat("Column:", non_numeric_columns[i], "\n")
+  print(unique_non_numeric_values[[i]])
+  cat("\n")
+}
+```
+
+#### Missing Values
+
+```{r}
+oregon_emergency |>   
+  miss_var_summary()|>
+  filter(n_miss>0)|>
+  ggplot(aes(variable,pct_miss))+
+  geom_bar(stat = "identity")
+```
+
+```{r}
+#drop columns that have more than 40% missing values
+missing_col <- colMeans(is.na(oregon_emergency))
+complete_cols <- missing_col < 0.4
+oregon_emergency <- oregon_emergency[,complete_cols]
+
+dim(oregon_emergency)
+
+#Most of columns are binary and have few missing values - fill with 0
+eg_col<- names(oregon_emergency)
+oregon_emergency[eg_col][is.na(oregon_emergency[eg_col])] <- 0
+
+```
+
+## 3. oregon_pattern
+
+Setting non-date values to NA
+
+```{r}
+# oregon_patterns <- read.csv("data/oregonhie_patterns_vars.csv")
+library(lubridate)
+oregon_patterns$dt_notify_treat <- dmy(oregon_patterns$dt_notify_treat)
+oregon_patterns$dt_notify_treat[!is.Date(oregon_patterns$dt_notify_treat)] <- NA
+```
+
+Converting female list to gender colomn using regex
+
+```{r}
+oregon_patterns$gender <- as.numeric(sub("^(\\d+):.*", "\\1", oregon_patterns$female_list))
+oregon_patterns$female_list <- NULL
+head(oregon_patterns)
+```
+
+Converting texts (have phone list, pobox, ohp_all_ever) to binary
+
+```{r}
+# Custom function: converts to lower, trims whitespace and converts to binary
+convert_to_binary <- function(df_column, target_string, true_value = 1, false_value = 0) {
+  df_column <- tolower(df_column)
+  df_column <- gsub("\\s+|\\$+", "", df_column)
+  return(ifelse(df_column == target_string, true_value, false_value))
+}
+
+# Applying the function to each column
+oregon_patterns$have_phone_list <- convert_to_binary(oregon_patterns$have_phone_list, "gave phone number")
+oregon_patterns$pobox_list <- convert_to_binary(oregon_patterns$pobox_list, "not pobox", false_value = 1)
+oregon_patterns$ohp_all_ever_inperson <- convert_to_binary(oregon_patterns$ohp_all_ever_inperson, "enrolled")
+
+```
+
+convert all yes/nos into 1,0 with custom function
+
+```{r}
+# Custom function to convert "Yes" to 1 and "No" to 0
+
+convert_yes_no_to_binary <- function(column) {
+  ifelse(column == "Yes", 1, 0)
+}
+
+# List of column names to convert
+columns_to_convert <- c("any_visit_180p_180", "any_visit_180p_360", "any_visit_180p_540",
+                        "any_visit_180p_720", "preperiod_any_visits", "medicaid_all_180p_period_180",
+                        "medicaid_all_180p_period_360", "medicaid_all_180p_period_540",
+                        "medicaid_all_180p_period_720",
+                        "doc_any_incl_probe_inp",
+                        "any_inp_match_ed",
+                        "treatment")
+
+for (column_name in columns_to_convert) {
+  oregon_patterns[[column_name]] <- convert_yes_no_to_binary(oregon_patterns[[column_name]])
+}
+
+
+head(oregon_patterns)
+
+
+```
+
+```{r}
+oregon_patterns$english_list <- ifelse(oregon_patterns$english_list == "Requested materials in language other than english", 1, 0)
+oregon_patterns$self_list <- ifelse(oregon_patterns$self_list == "Signed self up", 1, 0)
+
+head(oregon_patterns)
+```
+
+Removing Unnecesary Columns
+
+```{r}
+library(dplyr)
+
+# Using dplyr to remove columns
+oregon_patterns <- dplyr::select(oregon_patterns, - first_day_list, -dt_completed_inp, -sample_inp_resp, -ed_any_incl_probe_inp, -draw_lottery,-dt_notify_treat)
+head(oregon_patterns)
+
+```
+
+Imputation for Missing Values
+
+```{r}
+# Load necessary libraries
+library(tidyr)
+library(dplyr)
+
+train_data <- oregon_patterns %>% filter(!is.na(weight_total_inp))
+prediction_data <- oregon_patterns %>% filter(is.na(weight_total_inp))
+
+# Define the linear regression model using the training data
+model <- lm(weight_total_inp ~ weight_720days + weight_540days + weight_360days + weight_180days, data = train_data)
+
+# Predict the missing values using the model
+prediction_data$weight_total_inp <- predict(model, newdata = prediction_data)
+
+# Combine the data back together
+oregon_patterns <- rbind(train_data, prediction_data)
+```
+
+# Exploratory Data Analysis
+
+## Understanding the Responses given by Audience
+
+```{r}
+
+# health_change_inp 
+#  "1: Worse" "2: About the same" "0: Better" 
+
+oregon_in_person_complete |>
+  ggplot(aes(x = health_change_inp, fill=as.factor(health_change_inp))) +
+  geom_bar()+
+  scale_fill_brewer(palette = "Set1") +
+  labs(x = "Health Change", y = "Count")+
+  theme(legend.position = "none")
+  
+# happiness_inp 
+# "0: Very happy"    "1: Pretty happy"  "2: Not too happy"
+oregon_in_person_complete |>
+  ggplot(aes(x = happiness_inp, fill=as.factor(happiness_inp))) +
+  geom_bar()+
+  scale_fill_brewer(palette = "Set2") +
+  labs(x = "Happiness Level", y = "Count")+
+  theme(legend.position = "none")
+```
+
+We can see that the majority of respondents reported their health as "About the same," followed by "Better" and "Worse." This suggests that a significant portion of the audience perceives their health to be relatively stable. An optimistic insight that the lowest response was scored by "worse".
+
+The second visualization displays the distribution of happiness levels among the respondents. We observe that most respondents reported being "Pretty happy," with fewer respondents indicating being "Very happy" or "Not too happy." This indicates that the audience generally perceives themselves to be moderately happy.
+
+```{r}
+oregon_in_person_complete |>
+  ggplot(aes(x=gender_inp,fill=as.factor(gender_inp))) +
+  geom_bar()
+
+oregon_in_person_complete |>
+ggplot(aes(x = pcs8_score_inp)) +
+  geom_histogram(bins = 20, color = "black", fill = "steelblue") +
+  labs(title = "Distribution of Physical Health Scores", x = "Physical Score", y = "Density") +
+  theme_light()
+  
+oregon_in_person_complete |>
+ggplot(aes(x = mcs8_score_inp)) +
+  geom_histogram(bins = 20, color = "black", fill = "violetred") +
+  labs(title = "Distribution of Mental Health Scores", x = "Mental Score", y = "Density") +
+  theme_light()
+```
+
+The areas of red and blue are relatively similar in size, audience is fairly evenly distributed between the two genders.
+
+More people tend to have higher mental and physical health scores in the range of 40 - 60.
+
+```{r}
+
+oregon_descriptive |>
+  mutate(
+    treatment = as.factor(treatment),
+    draw_lottery = as.factor(draw_lottery)
+  ) |>
+  ggplot(aes(x = treatment, fill = treatment)) +
+  geom_bar() +
+  labs(title = "Distribution of Treatment Groups", x = "Treatment", y = "Count") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
+```
+
+# Data Preprocessing
+
+### Create Dataset for modeling
+
+```{r}
+#Based on the columns description and relativess, we filtered out some columns like zipcode, id columns etc.
+oregon_in_person_filtered <- oregon_in_person_complete |>
+  dplyr::select(
+    person_id,
+    weight_total_inp,
+    age_inp,
+    race_white_inp,
+    ins_any_inp,
+    health_last12_inp,
+    chl_inp,
+    bmi_inp,
+    bp_dar_inp,
+    bp_sar_inp,
+    health_change_inp,
+    sf4_inp,
+    ast_dx_pre_lottery_inp,
+    dia_dx_pre_lottery_inp,
+    hbp_dx_pre_lottery_inp,
+    chl_dx_pre_lottery_inp,
+    ami_dx_pre_lottery_inp,
+    chf_dx_pre_lottery_inp,
+    emp_dx_pre_lottery_inp,
+    kid_dx_pre_lottery_inp,
+    cancer_dx_pre_lottery_inp,
+    dep_dx_pre_lottery_inp,
+    dia_dx_post_lottery_inp,
+    hbp_dx_post_lottery_inp,
+    chl_dx_post_lottery_inp,
+    dep_dx_post_lottery_inp,
+    happiness_inp,
+    phqtot_inp,
+    doc_num_incl_probe_inp,
+    hosp_num_incl_probe_inp,
+    pcs8_score_inp,
+    mcs8_score_inp
+  )
+```
+
+```{r}
+oregon_in_person_filtered|>
+  vis_dat()
+```
+
+### Merged data
+
+```{r}
+#mearge oregon_in_person with oregon_descriptive
+merged_data <- oregon_in_person_filtered |>
+  left_join(oregon_descriptive|>
+              dplyr::select(person_id, female_list, treatment), by = "person_id")
+dim(merged_data)
+
+#merge with oregon_emergency
+merged_data <- merged_data |>
+  inner_join(oregon_emergency|>
+              dplyr::select(
+                person_id, 
+                num_visit_cens_ed, # Number of ED visits in the study period (Censored)
+                num_hosp_cens_ed, #Number ED visit resulting in a hospitalization in the study period
+                charg_tot_ed #Sum of total charges in the study period
+                ), by = "person_id")
+dim(merged_data)
+
+#merge with oregon_patterns
+merged_data <- merged_data |>
+  inner_join(oregon_patterns|>
+              dplyr::select(
+                person_id,
+                weight_720days, #Weight at 720 days after lottery notification
+                weight_total_inp,
+                ohp_all_ever_inperson #Ever enrolled in Medicaid from 10mar2008 until in-person interview date 
+                ), by = "person_id")
+dim(merged_data)
+
+```
+
+### Converting Target Variables for Mental and Physical Health
+
+-   First target variable: **`health_chage_inp`**
+
+Change the value "2" to "0" since it represents "About the same". Converting the variable to a binary format with "0" representing "Better(Not bad)" and "1" representing "Worse" will make it suitable as a target variable for binary classification tasks.
+
+-   Second target variable: **`happiness_inp`**
+
+Convert to a binary variable where "0" represents "Happy" (values 0 and 1) and "1" represents "Not happy" (value 2).
+
+```{r}
+# health_change_inp 
+#  "1: Worse" "2: About the same" "0: Better" 
+# 0 + 2 -> 0, 1 -> 1
+table(merged_data$health_change_inp)
+
+merged_data$health_change_inp <- ifelse(merged_data$health_change_inp == 2, 0, merged_data$health_change_inp)
+
+table(merged_data$health_change_inp)
+
+# happiness_inp 
+# "0: Very happy"    "1: Pretty happy"  "2: Not too happy"
+# 0 + 1 -> 0, 2 -> 1
+
+table(merged_data$happiness_inp)
+merged_data$happiness_inp <- ifelse(merged_data$happiness_inp %in% c(0, 1), 0, 1)
+
+table(merged_data$happiness_inp)
+```
+
+```{r}
+health_counts <- table(merged_data$health_change_inp)
+happy_counts <- table(merged_data$happiness_inp)
+
+barplot(health_counts, col = "lightblue", main = "Health Status")
+barplot(happy_counts, col = "lightblue", main = "Happiness Status")
+```
+
+### covert to factor variables
+
+```{r}
+convert_to_factor <- function(df) {
+  for (col_name in names(df)) {
+    unique_values <- unique(na.omit(df[[col_name]]))
+    if (length(unique_values) <= 10) {
+      df[[col_name]] <- factor(df[[col_name]])
+    }
+  }
+  return(df)
+}
+
+modelling_data<-merged_data|>
+  dplyr::select(-c(person_id))
+
+modelling_data_final <- convert_to_factor(modelling_data)
+
+str(modelling_data_final)
+```
+
+# Modeling
+
+We performed **Principal Component Analysis (PCA)** to reduce the dimensionality of the dataset while preserving its essential information, aiding in better understanding the underlying patterns and relationships within the data.
+
+Additionally, we utilized **bootstrap resampling** to quantify uncertainty in parameter estimates, providing robustness to our model by generating confidence intervals around the estimated coefficients. Furthermore, to evaluate the predictive performance of our model, we partitioned the dataset into training and **held-out test sets**, employing cross-validation techniques to assess model generalization and validate its effectiveness on unseen data. Through these comprehensive modeling strategies, we aimed to develop robust and reliable predictive models capable of capturing the inherent complexities of the underlying data.
+
+```{r}
+write.csv(modelling_data_final, "cleaned_combined_modelling_data/classification_modelling_data.csv", row.names = FALSE)
+```
+
+## [Classification for Mental Health - Predicting Happiness Response]{.underline}
+
+### Define the Recipe
+
+```{r}
+happy_rcp <- recipe(happiness_inp ~ .
+                     ,data = modelling_data_final)|>
+  step_normalize(all_numeric_predictors()) |>
+  step_pca(all_numeric_predictors(), 
+           num_comp = 10) |>
+  step_dummy(all_nominal_predictors())
+```
+
+### Model1: Logistic Regression
+
+```{r}
+parsnip_1 <- logistic_reg() |>
+  set_mode("classification") |>
+  set_engine("glm")
+
+workflow_1 <- workflow() |>
+  add_model(parsnip_1) |>
+  add_recipe(happy_rcp)
+```
+
+### Model2: Logistic regression using the lasso
+
+```{r}
+parsnip_2 <- logistic_reg(penalty = 0.01) |>
+  set_mode("classification") |>
+  set_engine("glmnet")
+
+workflow_2 <- workflow() |>
+  add_model(parsnip_2) |>
+  add_recipe(happy_rcp)
+```
+
+### Model3 : K-nearest neighbors model (K = 5)
+
+```{r}
+parsnip_3 <- nearest_neighbor() |>
+  set_mode("classification") |>
+  set_engine("kknn",
+             neighbors = 5)
+
+workflow_3 <- workflow() |>
+  add_model(parsnip_3) |>
+  add_recipe(happy_rcp)
+```
+
+### Model4 : K-nearest neighbors model (K = 1)
+
+```{r}
+parsnip_4 <- nearest_neighbor() |>
+  set_mode("classification") |>
+  set_engine("kknn",
+             neighbors = 1)
+
+workflow_4 <- workflow() |>
+  add_model(parsnip_4) |>
+  add_recipe(happy_rcp)
+```
+
+### Model5 : Random Forest model
+
+```{r}
+parsnip_5 <- rand_forest() |>
+  set_mode("classification") |>
+  set_engine("ranger")
+
+workflow_5 <- workflow() |>
+  add_model(parsnip_5) |>
+  add_recipe(happy_rcp)
+```
+
+### Split the data
+
+```{r}
+set.seed(11)
+happy_split <- initial_split(modelling_data_final, 
+                              prop = 0.7, 
+                              strata = happiness_inp)
+
+happy_train <- happy_split |>
+  training()
+
+happy_test <- happy_split |>
+  testing()
+```
+
+### Assembling
+
+```{r}
+workflow_names <- c("glm", 
+                    "glm_lasso",
+                    "knn_5",
+                    "knn_1",
+                    "rf")
+
+workflow_objects <- list(workflow_1,
+                         workflow_2,
+                         workflow_3,
+                         workflow_4,
+                         workflow_5)
+
+workflows_tbl <- tibble(work_names = workflow_names,
+                        work_objects = workflow_objects) 
+```
+
+fitting the model
+
+```{r}
+set.seed(1)
+workflows_tbl <-  workflows_tbl |>
+  rowwise() |>
+  mutate(fits = list(fit(work_objects, 
+                         happy_train)))
+```
+
+## Model Evaluatation
+
+```{r}
+workflows_tbl_predictions <- workflows_tbl |>
+  mutate(pred_class = list(predict(fits,
+                                   happy_test,
+                                   type = "class"))) |>
+  mutate(pred_prob = list(predict(fits,
+                                  happy_test,
+                                  type = "prob")))
+
+workflows_tbl_predictions <- workflows_tbl_predictions |>
+  mutate(predictions = list(bind_cols(pred_class, pred_prob))) |>
+  dplyr::select(-c(pred_class, pred_prob))
+```
+
+```{r}
+predictions_tbl  <- workflows_tbl_predictions |>
+  dplyr::select(work_names, 
+         predictions) |>
+  unnest(cols = c(predictions)) |>
+  cbind(happiness_inp = happy_test |>
+          pull(happiness_inp))
+
+glimpse(predictions_tbl)
+```
+
+### Assessing estimated **probabilities**
+
+ROC Curve
+
+```{r}
+roc_all <- predictions_tbl |>
+  group_by(work_names) |>
+  roc_curve(truth = happiness_inp,
+            .pred_1,
+            event_level = "second")
+
+roc_all |>
+  ggplot(aes(x = 1- specificity, 
+             y = sensitivity, 
+             color = work_names)) +
+  geom_path()
+```
+
+```{r}
+roc_auc_all <- predictions_tbl |>
+  group_by(work_names) |>
+  roc_auc(truth = happiness_inp,
+          .pred_1,
+          event_level = "second")
+
+roc_auc_all
+```
+
+### Re-substituting the data
+
+```{r}
+workflows_resub <- workflows_tbl |>
+  mutate(predictions = list(predict(fits,
+                                    happy_train,
+                                    type = "class")))
+
+
+predictions_resub  <- workflows_resub |>
+  dplyr::select(work_names, 
+         predictions) |>
+  unnest(cols = c(predictions)) |>
+  cbind(happiness_inp = happy_train |>
+          pull(happiness_inp))
+```
+
+```{r}
+predictions_resub |> 
+  group_by(work_names) |>
+  accuracy(truth = happiness_inp, 
+           estimate = .pred_class)
+```
+
+### Validation Set
+
+```{r}
+set.seed(1)
+val_set <- validation_split(happy_train, 
+                            prop = 0.75, 
+                            strata = happiness_inp)
+```
+
+```{r}
+val_set |>
+  class()
+```
+
+```{r}
+set.seed(1)
+happy_metric_set <- metric_set(accuracy, 
+                                roc_auc)
+
+workflows_val <- workflows_tbl |>
+  mutate(fits = list(fit_resamples(work_objects,
+                                   val_set,
+                                   metrics = happy_metric_set))) |>
+  mutate(metrics = list(collect_metrics(fits)))
+
+workflows_val |>
+  dplyr::select(c(work_names,
+           metrics)) |>
+  unnest(metrics) |>
+  arrange(.metric)
+```
+
+```{r}
+workflows_val |>
+  dplyr::select(c(work_names,
+           metrics)) |>
+  unnest(metrics) |>
+  ggplot(aes(y = work_names,
+             fill = work_names,
+             x = mean)) +
+  geom_col() +
+  facet_wrap(~.metric,
+             nrow = 2)
+```
+
+```{r}
+validation_performance <- workflows_val |>
+  dplyr::select(c(work_names,
+           metrics)) |>
+  unnest(metrics) |>
+  filter(.metric == "accuracy") |>
+  arrange(work_names)
+
+resub_performance <- predictions_resub |> 
+  group_by(work_names) |>
+  accuracy(truth = happiness_inp, 
+           estimate = .pred_class) |>
+  arrange(work_names)
+
+test_performance <- predictions_tbl |>
+  group_by(work_names) |>
+  accuracy(truth = happiness_inp, 
+           estimate = .pred_class) |>
+  arrange(work_names)
+
+comparison <- test_performance |>
+  dplyr::select(work_names) |>
+  mutate(estimate_test = test_performance |> pull(.estimate),
+         estimate_val = validation_performance |> pull(mean),
+         estimate_resub = resub_performance |> pull(.estimate))
+
+comparison
+```
+
+## [Classification for Physical Health - Predicting Health Change Response]{.underline}
+
+### Defining the Recipe
+
+```{r}
+
+healthchange_rcp <- recipe(health_change_inp ~ .
+                     ,data = modelling_data_final)|>
+  step_normalize(all_numeric_predictors()) |>
+  step_pca(all_numeric_predictors(), 
+           num_comp = 10) |>
+  step_dummy(all_nominal_predictors())
+
+```
+
+### Model 6: Logistic Regression
+
+```{r}
+
+parsnip_6 <- logistic_reg() |>
+  set_mode("classification") |>
+  set_engine("glm")
+
+workflow_6 <- workflow() |>
+  add_model(parsnip_1) |>
+  add_recipe(healthchange_rcp)
+```
+
+### Model 7: Logistic regression using lasso
+
+```{r}
+
+parsnip_7 <- logistic_reg(penalty = 0.01) |>
+  set_mode("classification") |>
+  set_engine("glmnet")
+
+workflow_7 <- workflow() |>
+  add_model(parsnip_2) |>
+  add_recipe(healthchange_rcp)
+```
+
+### Model 8 : K-nearest neighbors model (K = 5)
+
+```{r}
+
+parsnip_8 <- nearest_neighbor() |>
+  set_mode("classification") |>
+  set_engine("kknn",
+             neighbors = 5)
+
+workflow_8 <- workflow() |>
+  add_model(parsnip_3) |>
+  add_recipe(healthchange_rcp)
+```
+
+### Model 9 : K-nearest neighbors model (K = 1)
+
+```{r}
+
+parsnip_9 <- nearest_neighbor() |>
+  set_mode("classification") |>
+  set_engine("kknn",
+             neighbors = 1)
+
+workflow_9 <- workflow() |>
+  add_model(parsnip_4) |>
+  add_recipe(healthchange_rcp)
+```
+
+### Model 10 : Random Forest model
+
+```{r}
+
+parsnip_10 <- rand_forest() |>
+  set_mode("classification") |>
+  set_engine("ranger")
+
+workflow_10 <- workflow() |>
+  add_model(parsnip_5) |>
+  add_recipe(healthchange_rcp)
+```
+
+### Split the Data
+
+```{r}
+
+set.seed(11)
+healthchange_split <- initial_split(modelling_data_final, 
+                              prop = 0.7, 
+                              strata = health_change_inp)
+
+healthchange_train<- healthchange_split |>
+  training()
+
+healthchange_test <- healthchange_split |>
+  testing()
+```
+
+### Assembling Models
+
+```{r}
+
+workflow_names1 <- c("glm", 
+                    "glm_lasso",
+                    "knn_5",
+                    "knn_1",
+                    "rf")
+
+workflow_objects1 <- list(workflow_6,
+                         workflow_7,
+                         workflow_8,
+                         workflow_9,
+                         workflow_10)
+
+workflows_tbl1 <- tibble(work_names = workflow_names,
+                        work_objects = workflow_objects) 
+```
+
+## Model Evaluation
+
+### Assessing estimated **probabilities**
+
+```{r}
+
+set.seed(1)
+workflows_tbl1 <-  workflows_tbl1 |>
+  rowwise() |>
+  mutate(fits = list(fit(work_objects, 
+                         healthchange_train)))
+
+workflows_tbl_predictions1 <- workflows_tbl1 |>
+  mutate(pred_class = list(predict(fits,
+                                   healthchange_test,
+                                   type = "class"))) |>
+  mutate(pred_prob = list(predict(fits,
+                                  healthchange_test,
+                                  type = "prob")))
+
+workflows_tbl_predictions1 <- workflows_tbl_predictions1 |>
+  mutate(predictions = list(bind_cols(pred_class, pred_prob))) |>
+  dplyr::select(-c(pred_class, pred_prob))
+```
+
+```{r}
+
+predictions_tbl1  <- workflows_tbl_predictions1 |>
+  dplyr::select(work_names, 
+         predictions) |>
+  unnest(cols = c(predictions)) |>
+  cbind(health_change_inp = healthchange_test |>
+          pull(health_change_inp))
+
+
+roc_all <- predictions_tbl1 |>
+  group_by(work_names) |>
+  roc_curve(truth = health_change_inp,
+            .pred_1,
+            event_level = "second")
+
+
+roc_all |>
+  ggplot(aes(x = 1- specificity, 
+             y = sensitivity, 
+             color = work_names)) +
+  geom_path()
+```
+
+```{r}
+
+roc_auc_all1 <- predictions_tbl1 |>
+  group_by(work_names) |>
+  roc_auc(truth = health_change_inp,
+          .pred_1,
+          event_level = "second")
+
+roc_auc_all1
+```
+
+## [Regression for Predicting Overall Physical and Mental Health]{.underline}
+
+Creating the continuous response variable
+
+```{r}
+merged_data <- merged_data |>
+  mutate(health_score = (pcs8_score_inp + mcs8_score_inp) / 2) |>
+  dplyr::select(-c(pcs8_score_inp, mcs8_score_inp))
+
+```
+
+Converting to factor Variables.
+
+```{r}
+modelling_data<-merged_data|>
+  dplyr::select(-c(person_id))
+
+modelling_data_final <- convert_to_factor(modelling_data)
+
+str(modelling_data_final)
+```
+
+```{r}
+write.csv(modelling_data_final, "cleaned_combined_modelling_data/regression_modelling_data.csv", row.names = FALSE)
+```
+
+### Defining the Recipe
+
+```{r}
+health_recipe <- recipe(health_score ~ .,data = modelling_data_final)|>
+  step_normalize(all_numeric_predictors()) |>
+  step_pca(all_numeric_predictors(), 
+           num_comp = 5) |>
+  step_dummy(all_nominal_predictors())
+```
+
+### Model 1: Linear Regression
+
+```{r}
+linear_reg_spec <- linear_reg() |> 
+  set_mode("regression") |>
+  set_engine("lm")
+
+workflow_lm <- workflow() |>
+  add_recipe(health_recipe) |>
+  add_model(linear_reg_spec)
+```
+
+### Model 2: KNN using k = 10
+
+```{r}
+knn_spec <- nearest_neighbor(neighbors = 10) |>
+  set_engine("kknn") |>
+  set_mode("regression")
+
+workflow_knn <- workflow() |>
+  add_recipe(health_recipe) |>
+  add_model(knn_spec)
+```
+
+### Model 3: Decision tree
+
+```{r}
+dtree_spec <- decision_tree() |>
+  set_engine("rpart") |>
+  set_mode("regression")
+
+workflow_dt <- workflow() |>
+  add_recipe(health_recipe) |>
+  add_model(dtree_spec)
+```
+
+### Model 4: Random Forest with 50 Trees
+
+```{r}
+rf_spec <- rand_forest(trees = 50) |> 
+  set_mode("regression") |>
+  set_engine("ranger")
+
+workflow_rf <- workflow() |>
+  add_recipe(health_recipe) |>
+  add_model(rf_spec)
+```
+
+### Model 5: XGBoost
+
+```{r}
+xgb_spec <- boost_tree(trees = 50) |>
+  set_engine("xgboost") |>
+  set_mode("regression")
+
+workflow_xgb <- workflow() |>
+  add_recipe(health_recipe) |>
+  add_model(xgb_spec)
+```
+
+### Splitting Data into Train And Test:
+
+Splitting the data into a testing and training set with 80 percent of the data being used for training, 20 percent being used for test.
+
+```{r}
+set.seed(1) 
+data_split <- initial_split(modelling_data_final, prop = 0.80)
+train_data <- training(data_split)
+test_data <- testing(data_split)
+```
+
+```{r}
+ggplot(data = train_data, aes(x = health_score)) +
+  geom_boxplot(aes(y = "Train")) +
+  geom_boxplot(data = test_data, aes(y = "Test")) +
+  scale_x_continuous(labels = label_number(scale_cut = cut_short_scale()))
+```
+
+Because they are randomly split, chances are that the split will be balanced. This balance looks pretty good.
+
+```{r}
+workflow_names <-
+  c(
+    "Linear Regression",
+    "K-Nearest Neighbors",
+    "Decision Tree",
+    "Random Forest",
+    "XGBoost"
+  )
+
+workflow_objects <-
+  list(workflow_lm,
+       workflow_knn,
+       workflow_dt,
+       workflow_rf,
+       workflow_xgb)
+
+workflows_tbl <- tibble(workflow_names = workflow_names,
+                        workflow_objects = workflow_objects)
+
+workflows_tbl <-  workflows_tbl |>
+  rowwise() |>
+  mutate(fits = list(fit(workflow_objects, 
+                         train_data)))
+```
+
+```{r}
+workflows_resub <- workflows_tbl |>
+  mutate(predictions = list(predict(fits,
+                                    train_data)))
+
+
+
+predictions_resub  <- workflows_resub |>
+  dplyr::select(workflow_names, 
+         predictions) |>
+  unnest(cols = c(predictions)) |>
+  cbind(health_score = train_data |>
+          pull(health_score))
+
+ggplot(predictions_resub, aes(x = health_score, y = .pred)) +
+  geom_point(aes(color = workflow_names), alpha = 0.6) + 
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray") +  # Add a 45-degree line
+  facet_wrap(~workflow_names, scales = "free") + 
+  labs(title = "Actual vs Predicted Health Scores by Model",
+       x = "Actual Health Score",
+       y = "Predicted Health Score") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+Defining Metric set for regression problem:
+
+```{r}
+regression_metric_set <- metric_set(rmse, rsq, mae)
+```
+
+Lets use bootstrap resampling method
+
+```{r}
+bootstrap_resamples <- bootstraps(train_data, times = 10)
+```
+
+Creating a function to evaluate bootstrap resmaples
+
+```{r}
+bootstrap_evaluate <- function(workflow, resamples) {
+  fit_resamples(
+    workflow,
+    resamples = resamples,
+    metrics = metric_set(rmse, rsq)
+  )
+}
+```
+
+```{r}
+set.seed(1)
+workflows_bootstrap <- workflows_tbl |>
+  mutate(fits = list(fit_resamples(workflow_objects,
+                                         bootstrap_resamples,
+                                         metrics = regression_metric_set))) |>
+  mutate(metrics = list(collect_metrics(fits)))
+```
+
+```{r}
+bootstrap_results <- workflows_bootstrap |>
+  dplyr::select(c(workflow_names,
+           metrics)) |>
+  unnest(metrics) |>
+  arrange(.metric)
+
+bootstrap_results
+```
+
+## Model Evaluation
+
+### Training
+
+```{r}
+ggplot(bootstrap_results, aes(x = workflow_names, y = mean, fill = workflow_names)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  facet_wrap(~ .metric, scales = "free") +
+  labs(title = "Model Performance Comparison by Metric",
+       x = "Model",
+       y = "Metric Value",
+       fill = "Model") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  
+```
+
+We can see that linear regression model gives us the least mae and rmse and highest rsq compared to other models, the linear model fits well to the taining data.
+
+### Testing
+
+Lets Evaluate the predictive performance on the held-out test data.
+
+```{r}
+workflows_tbl_test_predictions <- workflows_tbl |>
+  mutate(test_pred_value = list(predict(fits,
+                                        test_data)))
+
+predictions_test_data  <- workflows_tbl_test_predictions |>
+  dplyr::select(workflow_names,
+                test_pred_value) |>
+  unnest(cols = c(test_pred_value)) |>
+  cbind(actual_health_score_test = test_data |>
+          pull(health_score))
+
+model_performance_test_data <- predictions_test_data |>
+  group_by(workflow_names) |>
+  summarise(
+    mae = mean(abs(.pred - actual_health_score_test)),
+    rmse = sqrt(mean((
+      .pred - actual_health_score_test
+    ) ^ 2)),
+    rsq = cor(.pred, actual_health_score_test) ^ 2
+  )
+
+model_performance_test_data |>
+  pivot_longer(
+    cols = c(mae, rmse, rsq),
+    names_to = "metric",
+    values_to = "value"
+  ) |>
+  ggplot(aes(x = workflow_names, y = value, fill = metric)) +
+  geom_col(position = position_dodge(), width = 0.7) +
+  facet_wrap( ~ metric, scales = "free_y") +
+  labs(title = "Model Performance Comparison",
+       x = "Model",
+       y = "Metric Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom")
+```
+
+We can see from the above charts that, there is pretty much close match up between linear and XGB model, but if we look closely, XGB model is performing slightly better on test data.
+
+# Results - Impact of Medicaid Insurance on Physical and Mental Health
+
+Based on our evaluation metrics, the 3 best models from above are glm with lasso for predicting happiness, random forest for predicting health change and linear regression for predicting overall health score, physical and mental health combined.
+
+We will interpret how opting for medicaid insurance has impacted the physical and mental health of our respondents.
+
+```{r}
+happy_train$happiness_inp <- as.numeric(as.character(happy_train$happiness_inp))
+set.seed(123)  
+
+x <- as.matrix(happy_train[, -which(names(happy_train) == "happiness_inp")])
+y <- happy_train$happiness_inp
+
+cv_lasso <- cv.glmnet(x, y, alpha = 1) 
+best_lambda <- cv_lasso$lambda.min
+lasso_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+
+
+model1 <- glm(happiness_inp ~ ., data = happy_train)
+summary(model)
+
+```
+
+weight_total_inp.x: This predictor has a negative coefficient, meaning that as weight_total_inp.x increases, happiness_inp tends to decrease, holding other factors constant. age_inp: This has a positive coefficient, indicating that as age_inp increases, so does happiness_inp, holding other factors constant.
+
+Significant predictors are physical score, mental score, race and health.
+
+```{r}
+library(randomForest)
+healthchange_train$health_change_inp <- as.numeric(as.character(healthchange_train$health_change_inp))
+
+rf_model <- randomForest(as.factor(health_change_inp) ~ ., data = healthchange_train, ntree = 50, mtry = 3)
+```
+
+```{r}
+
+train_data$health_score <- as.numeric(as.character(train_data$health_score))
+model2 <-glm(health_score ~., data=train_data)
+summary(model2)
+```
+
+variables such as health_last12_inp2 to health_last12_inp6, health_change_inp1, and the various sf4_inp variables are significant predictors of the health_score. In contrast, weight_total_inp.x and bmi_inp do not significantly predict health_score given their high p-values. many predictors seem to negatively influence the health score, given the negative coefficients (e.g., sf4_inp1 to sf4_inp5, dep_dx_pre_lottery_inp1, happiness_inp1). However, the health_last12_inp series has positive coefficients, indicating a positive association with the health score.
+
+# Conclusion
+
+Medicaid coverage increased use of health care services, raised rates of diabetes detection and management, decreased rates of depression, and lessened financial strain, but it did not significantly improve measured physical health outcomes in the first two years, according to this randomised, controlled study. Extended health insurance coverage age has other significant potential benefits outside changes in health condition, which are of great interest. Health insurance is a type of financial instrument designed to protect individuals from uninsurable medical costs in the event of an injury or illness (while also guaranteeing payment to the healthcare providers who treat them). Medicaid coverage virtually eliminated catastrophic out-of-pocket medical expenses in our study.
+
+Medicaid coverage led to a rise in the quantity of prescription medications obtained and doctor visits,we did not see any appreciable differences in ER visits or hospital admissions.
+
+Our study offers proof of the benefits of Medicaid expansion to low-income individuals based on a randomised methodology, which is uncommon in social insurance programme evaluations. We discovered that insurance significantly improved mental health, decreased financial stress, and boosted access to and use of healthcare services. However, we did not see any drops in measured blood pressure, cholesterol, or glycated haemoglobin levels.
